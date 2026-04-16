@@ -1,12 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from typing import Optional
 from database import get_db
 from models import Product, Category
-from schemas import ProductCreate, ProductUpdate, ProductResponse
+from schemas import ProductCreate, ProductUpdate, ProductResponse, StyleScanResponse
 from auth import require_admin
 
 router = APIRouter(prefix="/api/products", tags=["Products"])
+
+UPLOAD_DIR = Path(__file__).resolve().parents[1] / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _product_to_response(p: Product) -> ProductResponse:
@@ -28,6 +34,95 @@ def _product_to_response(p: Product) -> ProductResponse:
         stock=p.stock,
         is_active=p.is_active,
         created_at=p.created_at,
+    )
+
+
+def _infer_product_title(description: str) -> str:
+    lowered = description.lower()
+    if "dress" in lowered:
+        return "AI Curated Dress"
+    if "shirt" in lowered:
+        return "AI Curated Shirt"
+    if "jean" in lowered or "denim" in lowered:
+        return "AI Curated Denim"
+    if "jacket" in lowered:
+        return "AI Curated Jacket"
+    return "AI Curated Fashion Item"
+
+
+def _infer_category_slug(description: str) -> str:
+    lowered = description.lower()
+    if any(word in lowered for word in ["woman", "women", "female", "her"]):
+        return "women"
+    if any(word in lowered for word in ["street", "oversized", "urban", "hoodie"]):
+        return "streetwear"
+    if any(word in lowered for word in ["formal", "office", "blazer", "wedding"]):
+        return "formal"
+    return "men"
+
+
+def _infer_tags(description: str) -> list[str]:
+    lowered = description.lower()
+    tags: list[str] = []
+    mapping = {
+        "summer": ["breathable", "summer-ready"],
+        "winter": ["layering", "winter-essential"],
+        "party": ["party", "statement"],
+        "casual": ["everyday", "casual"],
+        "ethnic": ["ethnic", "festive"],
+        "work": ["office", "smart-style"],
+    }
+    for key, values in mapping.items():
+        if key in lowered:
+            tags.extend(values)
+    if not tags:
+        tags = ["trending", "ai-styled"]
+    return list(dict.fromkeys(tags))
+
+
+@router.post("/upload-image")
+async def upload_product_image(
+    image: UploadFile = File(...),
+    admin=Depends(require_admin),
+):
+    suffix = Path(image.filename or "").suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise HTTPException(status_code=400, detail="Only JPG, PNG and WEBP files are allowed")
+
+    file_name = f"{uuid4().hex}{suffix}"
+    target = UPLOAD_DIR / file_name
+    content = await image.read()
+    target.write_bytes(content)
+
+    return {"url": f"/uploads/{file_name}"}
+
+
+@router.post("/style-scan", response_model=StyleScanResponse)
+async def style_scan(
+    image: UploadFile = File(...),
+    description: str = Form(""),
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    upload_data = await upload_product_image(image=image, admin=admin)
+    text = description.strip() or "modern smart casual clothing"
+
+    category_slug = _infer_category_slug(text)
+    category = db.query(Category).filter(Category.slug == category_slug).first()
+
+    return StyleScanResponse(
+        suggested_name=_infer_product_title(text),
+        suggested_description=(
+            f"{text.capitalize()}. AI style scan suggests a premium fit, modern silhouette, and flexible day-to-night styling."
+        ),
+        suggested_category_id=category.id if category else None,
+        suggested_tags=_infer_tags(text),
+        suggested_sizes=["S", "M", "L", "XL"],
+        suggested_colors=[
+            {"name": "Black", "hex": "#111111"},
+            {"name": "Ivory", "hex": "#F5F5EB"},
+        ],
+        uploaded_image_url=upload_data["url"],
     )
 
 

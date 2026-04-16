@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { productApi, categoryApi, type ApiProduct, type ApiCategory } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Plus, Pencil, Trash2, X } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Sparkles, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 const AdminProducts = () => {
@@ -10,6 +10,9 @@ const AdminProducts = () => {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
+  const [scanImage, setScanImage] = useState<File | null>(null);
+  const [scanDescription, setScanDescription] = useState("");
+  const [scanning, setScanning] = useState(false);
   const [form, setForm] = useState({
     name: "", price: "", original_price: "", image_url: "", images: "",
     category_id: "", sizes: "", colors_text: "", description: "", tags: "", stock: "100",
@@ -28,6 +31,8 @@ const AdminProducts = () => {
     setForm({ name: "", price: "", original_price: "", image_url: "", images: "", category_id: "", sizes: "", colors_text: "", description: "", tags: "", stock: "100" });
     setEditId(null);
     setShowForm(false);
+    setScanImage(null);
+    setScanDescription("");
   };
 
   const editProduct = (p: ApiProduct) => {
@@ -46,6 +51,34 @@ const AdminProducts = () => {
     });
     setEditId(p.id);
     setShowForm(true);
+  };
+
+  const runStyleScan = async () => {
+    if (!scanImage) {
+      toast.error("Please upload an image first");
+      return;
+    }
+
+    try {
+      setScanning(true);
+      const result = await productApi.styleScan(scanImage, scanDescription);
+      setForm((prev) => ({
+        ...prev,
+        name: result.suggested_name,
+        description: result.suggested_description,
+        image_url: result.uploaded_image_url,
+        images: result.uploaded_image_url,
+        category_id: result.suggested_category_id ? String(result.suggested_category_id) : prev.category_id,
+        tags: result.suggested_tags.join(", "),
+        sizes: result.suggested_sizes.join(", "),
+        colors_text: result.suggested_colors.map((c) => `${c.name}:${c.hex}`).join(", "),
+      }));
+      toast.success("AI scan completed and form auto-filled");
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setScanning(false);
+    }
   };
 
   const handleSubmit = async () => {
@@ -105,7 +138,6 @@ const AdminProducts = () => {
         </Button>
       </div>
 
-      {/* Form Modal */}
       {showForm && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center pt-20 px-4 overflow-y-auto">
           <div className="bg-card rounded-xl p-6 w-full max-w-lg shadow-hover mb-10">
@@ -114,6 +146,28 @@ const AdminProducts = () => {
               <button onClick={resetForm}><X size={20} /></button>
             </div>
             <div className="space-y-3">
+              {!editId && (
+                <div className="border border-border rounded-xl p-3 bg-secondary/30 space-y-3">
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground">AI Style Scan</p>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => setScanImage(e.target.files?.[0] || null)}
+                    className={inputClass}
+                  />
+                  <textarea
+                    rows={2}
+                    placeholder="Describe mood/occasion (e.g. modern summer party look)"
+                    value={scanDescription}
+                    onChange={(e) => setScanDescription(e.target.value)}
+                    className={inputClass}
+                  />
+                  <Button variant="outline" className="w-full" onClick={runStyleScan} disabled={scanning}>
+                    {scanning ? <><Upload size={16} className="animate-pulse" /> Scanning...</> : <><Sparkles size={16} /> Scan & Autofill Product</>}
+                  </Button>
+                </div>
+              )}
+
               <input placeholder="Product Name *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputClass} />
               <div className="grid grid-cols-2 gap-3">
                 <input placeholder="Price *" type="number" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className={inputClass} />
@@ -138,7 +192,6 @@ const AdminProducts = () => {
         </div>
       )}
 
-      {/* Products Table */}
       <div className="bg-card rounded-xl shadow-soft overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm font-body">

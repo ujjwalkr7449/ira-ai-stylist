@@ -93,6 +93,17 @@ export interface ProductCreate {
   stock?: number;
 }
 
+
+export interface StyleScanResponse {
+  suggested_name: string;
+  suggested_description: string;
+  suggested_category_id: number | null;
+  suggested_tags: string[];
+  suggested_sizes: string[];
+  suggested_colors: ProductColor[];
+  uploaded_image_url: string;
+}
+
 export const productApi = {
   list: (params?: { category?: string; search?: string }) => {
     const qs = new URLSearchParams();
@@ -114,6 +125,13 @@ export const productApi = {
 
   delete: (id: number) =>
     request<{ ok: boolean }>(`/products/${id}`, { method: "DELETE" }),
+
+  styleScan: async (image: File, description: string) => {
+    const formData = new FormData();
+    formData.append("image", image);
+    formData.append("description", description);
+    return request<StyleScanResponse>("/products/style-scan", { method: "POST", body: formData });
+  },
 };
 
 // ─── Categories ──────────────────────────────────
