@@ -1,7 +1,7 @@
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, Request
 from sqlalchemy.orm import Session
 from typing import Optional
 from database import get_db
@@ -82,6 +82,7 @@ def _infer_tags(description: str) -> list[str]:
 
 @router.post("/upload-image")
 async def upload_product_image(
+    request: Request,
     image: UploadFile = File(...),
     admin=Depends(require_admin),
 ):
@@ -94,17 +95,18 @@ async def upload_product_image(
     content = await image.read()
     target.write_bytes(content)
 
-    return {"url": f"/uploads/{file_name}"}
+    return {"url": str(request.url_for("uploads", path=file_name))}
 
 
 @router.post("/style-scan", response_model=StyleScanResponse)
 async def style_scan(
+    request: Request,
     image: UploadFile = File(...),
     description: str = Form(""),
     admin=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    upload_data = await upload_product_image(image=image, admin=admin)
+    upload_data = await upload_product_image(request=request, image=image, admin=admin)
     text = description.strip() or "modern smart casual clothing"
 
     category_slug = _infer_category_slug(text)
