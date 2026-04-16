@@ -36,3 +36,4 @@ def health():
 UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+app.mount("/api/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="api_uploads")

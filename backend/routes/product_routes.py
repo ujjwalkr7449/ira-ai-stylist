@@ -1,7 +1,7 @@
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from typing import Optional
 from database import get_db
@@ -80,12 +80,7 @@ def _infer_tags(description: str) -> list[str]:
     return list(dict.fromkeys(tags))
 
 
-@router.post("/upload-image")
-async def upload_product_image(
-    request: Request,
-    image: UploadFile = File(...),
-    admin=Depends(require_admin),
-):
+async def _save_uploaded_image(image: UploadFile) -> str:
     suffix = Path(image.filename or "").suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
         raise HTTPException(status_code=400, detail="Only JPG, PNG and WEBP files are allowed")
@@ -94,19 +89,26 @@ async def upload_product_image(
     target = UPLOAD_DIR / file_name
     content = await image.read()
     target.write_bytes(content)
+    return file_name
 
-    return {"url": str(request.url_for("uploads", path=file_name))}
+
+@router.post("/upload-image")
+async def upload_product_image(
+    image: UploadFile = File(...),
+    admin=Depends(require_admin),
+):
+    file_name = await _save_uploaded_image(image)
+    return {"url": f"/api/uploads/{file_name}"}
 
 
 @router.post("/style-scan", response_model=StyleScanResponse)
 async def style_scan(
-    request: Request,
     image: UploadFile = File(...),
     description: str = Form(""),
     admin=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    upload_data = await upload_product_image(request=request, image=image, admin=admin)
+    file_name = await _save_uploaded_image(image)
     text = description.strip() or "modern smart casual clothing"
 
     category_slug = _infer_category_slug(text)
@@ -124,7 +126,7 @@ async def style_scan(
             {"name": "Black", "hex": "#111111"},
             {"name": "Ivory", "hex": "#F5F5EB"},
         ],
-        uploaded_image_url=upload_data["url"],
+        uploaded_image_url=f"/api/uploads/{file_name}",
     )
 
 
