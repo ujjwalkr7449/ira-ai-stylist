@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import ProductCard from "@/components/ProductCard";
-import { productApi, type ApiProduct } from "@/lib/api";
+import { productApi, categoryApi, type ApiProduct, type ApiCategory } from "@/lib/api";
 import { SlidersHorizontal, X } from "lucide-react";
 
 const priceRanges = [
@@ -17,6 +17,7 @@ const ShopPage = () => {
   const [searchParams] = useSearchParams();
   const categoryParam = searchParams.get("category");
   const [products, setProducts] = useState<ApiProduct[]>([]);
+  const [categories, setCategories] = useState<ApiCategory[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(categoryParam);
   const [selectedPriceRange, setSelectedPriceRange] = useState<number | null>(null);
@@ -25,10 +26,16 @@ const ShopPage = () => {
 
   useEffect(() => {
     setLoading(true);
-    productApi.list({ category: selectedCategory || undefined })
-      .then(setProducts)
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    Promise.all([
+      productApi.list({ category: selectedCategory || undefined }),
+      categoryApi.list()
+    ])
+    .then(([p, c]) => {
+      setProducts(p);
+      setCategories(c);
+    })
+    .catch(console.error)
+    .finally(() => setLoading(false));
   }, [selectedCategory]);
 
   // Update selectedCategory when URL param changes
@@ -106,13 +113,19 @@ const ShopPage = () => {
           <div>
             <h4 className="font-body text-xs uppercase tracking-[0.15em] text-muted-foreground mb-3">Category</h4>
             <div className="space-y-2">
-              {["men", "women", "streetwear", "formal"].map((c) => (
+              <button
+                onClick={() => setSelectedCategory(null)}
+                className={`block text-sm font-body transition-colors ${!selectedCategory ? "text-foreground font-medium" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                All
+              </button>
+              {categories.map((c) => (
                 <button
-                  key={c}
-                  onClick={() => setSelectedCategory(selectedCategory === c ? null : c)}
-                  className={`block text-sm font-body transition-colors ${selectedCategory === c ? "text-foreground font-medium" : "text-muted-foreground hover:text-foreground"}`}
+                  key={c.id}
+                  onClick={() => setSelectedCategory(selectedCategory === c.slug ? null : c.slug)}
+                  className={`block text-sm font-body transition-colors ${selectedCategory === c.slug ? "text-foreground font-medium" : "text-muted-foreground hover:text-foreground"}`}
                 >
-                  {c.charAt(0).toUpperCase() + c.slice(1)}
+                  {c.name}
                 </button>
               ))}
             </div>

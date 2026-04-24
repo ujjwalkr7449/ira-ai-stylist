@@ -223,3 +223,12 @@ export const chatApi = {
   send: (messages: ChatMessage[]) =>
     request<{ reply: string }>("/chat", { method: "POST", body: JSON.stringify({ messages }) }),
 };
+
+// ─── Uploads ─────────────────────────────────────
+export const uploadApi = {
+  uploadImage: (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return request<{ url: string }>("/upload", { method: "POST", body: formData });
+  },
+};

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { productApi, categoryApi, type ApiProduct, type ApiCategory } from "@/lib/api";
+import { productApi, categoryApi, uploadApi, type ApiProduct, type ApiCategory } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Plus, Pencil, Trash2, X } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 const AdminProducts = () => {
