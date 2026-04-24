@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, model_validator
 from typing import Optional
 from datetime import datetime
 
@@ -185,15 +185,34 @@ class WishlistResponse(BaseModel):
 # ─── Chat ────────────────────────────────────────────
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: str = Field(..., min_length=1, max_length=500)
 
 
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage]
+    # Primary input contract.
+    message: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    # Backward compatibility for existing frontend conversations.
+    messages: list[ChatMessage] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "ChatRequest":
+        if self.message:
+            return self
+        if any(m.role == "user" and m.content.strip() for m in self.messages):
+            return self
+        raise ValueError("Provide either 'message' or at least one user message in 'messages'.")
 
 
 class ChatResponse(BaseModel):
-    reply: str
+    message: str = Field(..., min_length=1, max_length=500)
+    # Backward compatibility for UI currently reading `reply`.
+    reply: str = Field(..., min_length=1, max_length=500)
+    product: Optional[str] = None
+    color: str
+    image_prompt: Optional[str] = None
+    image_url: Optional[str] = None
+    # Bonus: include a few example prompts users can try.
+    examples: list[str] = Field(default_factory=list)
 
 
 # ─── Stats ───────────────────────────────────────────

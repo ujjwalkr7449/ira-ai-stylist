@@ -1,72 +1,174 @@
-import httpx
-from fastapi import APIRouter, HTTPException
+from __future__ import annotations
+
+import re
+from urllib.parse import quote_plus
+
+from fastapi import APIRouter
+
 from schemas import ChatRequest, ChatResponse
-from config import GROQ_API_KEY, GROQ_MODEL, GROQ_API_URL
-from database import SessionLocal
-from models import Product
 
-router = APIRouter(prefix="/api/chat", tags=["Chat"])
+# Basic NLP dictionaries (simple and explicit by design)
+SUPPORTED_COLORS = {
+    "white",
+    "black",
+    "red",
+    "blue",
+    "green",
+    "yellow",
+    "orange",
+    "purple",
+    "pink",
+    "brown",
+    "gray",
+    "grey",  # alias normalized to gray
+    "beige",
+    "navy",
+}
+
+SUPPORTED_PRODUCTS = {
+    "shoe": "shoes",
+    "shoes": "shoes",
+    "sneaker": "sneakers",
+    "sneakers": "sneakers",
+    "shirt": "shirt",
+    "tshirt": "t-shirt",
+    "t-shirt": "t-shirt",
+    "hoodie": "hoodie",
+    "jacket": "jacket",
+    "jeans": "jeans",
+    "dress": "dress",
+    "bag": "bag",
+    "watch": "watch",
+    "cap": "cap",
+}
+
+CHAT_EXAMPLES = [
+    "show me red shoes",
+    "i want a black hoodie",
+    "find me a blue shirt",
+]
+
+router = APIRouter(prefix="/api", tags=["Chat"])
 
 
-def _get_product_catalog() -> str:
-    db = SessionLocal()
-    try:
-        products = db.query(Product).filter(Product.is_active == True).all()
-        lines = []
-        for p in products:
-            colors = ", ".join([c["name"] for c in (p.colors or [])]) or "N/A"
-            sizes = ", ".join(p.sizes or []) or "N/A"
-            lines.append(f"- {p.name} (₹{p.price}, Category: {p.category.name if p.category else 'N/A'}, Colors: {colors}, Sizes: {sizes})")
-        return "\n".join(lines) if lines else "No products available."
-    finally:
-        db.close()
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _normalize_text(text: str) -> str:
+    """Lowercase and remove punctuation so matching stays predictable."""
+    cleaned = re.sub(r"[^a-zA-Z0-9\s-]", " ", text.lower())
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
-SYSTEM_PROMPT_TEMPLATE = """You are IRA AI Stylist — a premium fashion consultant for IRA Clothing, an AI-driven fashion brand.
-
-Your job is to help customers find the perfect outfit from IRA's catalog. You should:
-1. Listen to their mood, occasion, or style preference
-2. Suggest specific products from the catalog below
-3. Explain why the combination works
-4. Be friendly, trendy, and enthusiastic (use emojis sparingly)
-5. Keep responses concise (max 3-4 sentences)
-6. Use **bold** for product names
-
-IRA Product Catalog:
-{catalog}
-
-If they ask about something not in the catalog, suggest the closest match. Always stay in character as a fashion stylist."""
+def _extract_color(normalized_text: str) -> str:
+    """Detect first color mention. If absent, default to white."""
+    tokens = normalized_text.split()
+    for token in tokens:
+        if token in SUPPORTED_COLORS:
+            return "gray" if token == "grey" else token
+    return "white"
 
 
-@router.post("", response_model=ChatResponse)
-async def chat(req: ChatRequest):
-    catalog = _get_product_catalog()
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(catalog=catalog)
+def _extract_product(normalized_text: str) -> str | None:
+    """Detect first supported product mention."""
+    tokens = normalized_text.split()
+    for token in tokens:
+        if token in SUPPORTED_PRODUCTS:
+            return SUPPORTED_PRODUCTS[token]
 
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend([{"role": m.role, "content": m.content} for m in req.messages])
+    # Tiny phrase fallback to catch words glued around punctuation/hyphens.
+    for raw, normalized in SUPPORTED_PRODUCTS.items():
+        if raw in normalized_text:
+            return normalized
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                GROQ_API_URL,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                },
-                json={
-                    "model": GROQ_MODEL,
-                    "messages": messages,
-                    "temperature": 0.7,
-                    "max_tokens": 300,
-                },
-            )
-            if resp.status_code != 200:
-                raise HTTPException(status_code=502, detail=f"AI service error: {resp.status_code}")
-            data = resp.json()
-            reply = data["choices"][0]["message"]["content"]
-            return ChatResponse(reply=reply)
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="AI service timeout")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
+    return None
+
+
+def _build_image_prompt(color: str, product: str) -> str:
+    return (
+        f"A high-quality ecommerce product image of {color} {product}, "
+        "clean background, studio lighting"
+    )
+
+
+def _build_placeholder_image_url(color: str, product: str) -> str:
+    # Placeholder image service with readable overlay text.
+    label = quote_plus(f"{color} {product}")
+    return f"https://placehold.co/600x600/png?text={label}"
+
+
+def _resolve_user_message(req: ChatRequest) -> str:
+    """Read direct message input first, fallback to last user message in history."""
+    if req.message and req.message.strip():
+        return req.message.strip()
+
+    for msg in reversed(req.messages):
+        if msg.role.lower() == "user" and msg.content.strip():
+            return msg.content.strip()
+
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+@router.post("/chat", response_model=ChatResponse)
+def chat(req: ChatRequest) -> ChatResponse:
+    """
+    Simple e-commerce chatbot endpoint.
+    - Extracts product + color via string matching.
+    - Defaults color to white.
+    - Asks for clarification when product is not detected.
+    """
+    user_message = _resolve_user_message(req)
+    normalized_text = _normalize_text(user_message)
+
+    product = _extract_product(normalized_text)
+    color = _extract_color(normalized_text)
+
+    if not product:
+        message = "Got it — which product are you looking for? (e.g., shoes, shirt, hoodie)"
+        return ChatResponse(
+            message=message,
+            reply=message,
+            product=None,
+            color=color,
+            image_prompt=None,
+            image_url=None,
+            examples=CHAT_EXAMPLES,
+        )
+
+    image_prompt = _build_image_prompt(color=color, product=product)
+    image_url = _build_placeholder_image_url(color=color, product=product)
+    message = f"Sure — here is a {color} {product} option."
+
+    return ChatResponse(
+        message=message,
+        reply=message,
+        product=product,
+        color=color,
+        image_prompt=image_prompt,
+        image_url=image_url,
+        examples=CHAT_EXAMPLES,
+    )
+
+
+@router.get("/chat/examples")
+def chat_examples() -> dict[str, list[dict[str, str]]]:
+    """Small set of sample requests/responses for quick manual testing."""
+    return {
+        "examples": [
+            {
+                "input": "show me red shoes",
+                "response_message": "Sure — here is a red shoes option.",
+            },
+            {
+                "input": "i want a hoodie",
+                "response_message": "Sure — here is a white hoodie option.",
+            },
+            {
+                "input": "show me something nice",
+                "response_message": "Got it — which product are you looking for? (e.g., shoes, shirt, hoodie)",
+            },
+        ]
+    }
