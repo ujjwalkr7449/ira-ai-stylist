@@ -1,18 +1,18 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 from datetime import datetime
 
 
 # ─── Auth ────────────────────────────────────────────
 class RegisterRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
     name: str
     phone: str = ""
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 
@@ -32,6 +32,11 @@ class UserResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class UserProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
 
 
 # ─── Category ────────────────────────────────────────
@@ -132,6 +137,7 @@ class OrderCreate(BaseModel):
     customer_phone: str = ""
     total: float = 0.0
     whatsapp_sent: bool = False
+    coupon_code: Optional[str] = None
 
 
 class OrderItemResponse(BaseModel):
@@ -182,18 +188,153 @@ class WishlistResponse(BaseModel):
         from_attributes = True
 
 
+class AddressCreate(BaseModel):
+    label: str = "Home"
+    line1: str
+    line2: str = ""
+    city: str
+    state: str
+    postal_code: str
+    country: str = "US"
+    is_default: bool = False
+
+
+class AddressUpdate(BaseModel):
+    label: Optional[str] = None
+    line1: Optional[str] = None
+    line2: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    is_default: Optional[bool] = None
+
+
+class AddressResponse(BaseModel):
+    id: int
+    label: str
+    line1: str
+    line2: str
+    city: str
+    state: str
+    postal_code: str
+    country: str
+    is_default: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CartItemAdd(BaseModel):
+    product_id: int
+    quantity: int = Field(default=1, ge=1)
+    size: str = ""
+    color: str = ""
+
+
+class CartItemUpdate(BaseModel):
+    quantity: int = Field(ge=1)
+
+
+class CartItemResponse(BaseModel):
+    id: int
+    product_id: int
+    quantity: int
+    size: str
+    color: str
+    product_name: str
+    product_price: float
+    product_image: str
+    stock: int
+
+
+class CartResponse(BaseModel):
+    items: list[CartItemResponse]
+    subtotal: float
+
+
+class CouponCreate(BaseModel):
+    code: str
+    discount_type: str = "percent"
+    value: float
+    min_order_amount: float = 0.0
+    max_discount: Optional[float] = None
+    usage_limit: Optional[int] = None
+    per_user_limit: Optional[int] = 1
+    is_active: bool = True
+
+
+class CouponResponse(BaseModel):
+    id: int
+    code: str
+    discount_type: str
+    value: float
+    min_order_amount: float
+    max_discount: Optional[float]
+    usage_limit: Optional[int]
+    per_user_limit: Optional[int]
+    used_count: int
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CheckoutQuoteRequest(BaseModel):
+    items: list[OrderItemCreate]
+    coupon_code: Optional[str] = None
+
+
+class CheckoutQuoteResponse(BaseModel):
+    subtotal: float
+    discount: float
+    total: float
+    coupon_code: Optional[str] = None
+    line_items: list[dict]
+
+
+class PasswordResetRequest(BaseModel):
+    email: str
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8)
+
+
 # ─── Chat ────────────────────────────────────────────
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: str = Field(..., min_length=1, max_length=500)
 
 
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage]
+    # Primary input contract.
+    message: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    # Backward compatibility for existing frontend conversations.
+    messages: list[ChatMessage] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "ChatRequest":
+        if self.message:
+            return self
+        if any(m.role == "user" and m.content.strip() for m in self.messages):
+            return self
+        raise ValueError("Provide either 'message' or at least one user message in 'messages'.")
 
 
 class ChatResponse(BaseModel):
-    reply: str
+    message: str = Field(..., min_length=1, max_length=500)
+    # Backward compatibility for UI currently reading `reply`.
+    reply: str = Field(..., min_length=1, max_length=500)
+    product: Optional[str] = None
+    color: str
+    image_prompt: Optional[str] = None
+    image_url: Optional[str] = None
+    # Bonus: include a few example prompts users can try.
+    examples: list[str] = Field(default_factory=list)
 
 
 # ─── Stats ───────────────────────────────────────────
