@@ -1,7 +1,18 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
-from routes import auth_routes, product_routes, category_routes, order_routes, wishlist_routes, chat_routes
+from routes import (
+    auth_routes,
+    product_routes,
+    category_routes,
+    order_routes,
+    wishlist_routes,
+    chat_routes,
+    user_routes,
+    cart_routes,
+    checkout_routes,
+    admin_routes,
+)
 
 # Create all tables
 Base.metadata.create_all(bind=engine)
@@ -24,6 +35,10 @@ app.include_router(category_routes.router)
 app.include_router(order_routes.router)
 app.include_router(wishlist_routes.router)
 app.include_router(chat_routes.router)
+app.include_router(user_routes.router)
+app.include_router(cart_routes.router)
+app.include_router(checkout_routes.router)
+app.include_router(admin_routes.router)
 
 
 @app.get("/api/health")

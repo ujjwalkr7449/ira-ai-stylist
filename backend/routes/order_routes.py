@@ -61,6 +61,27 @@ def list_my_orders(user=Depends(get_current_user), db: Session = Depends(get_db)
     return [_order_to_response(o) for o in orders]
 
 
+@router.get("/{order_id}", response_model=OrderResponse)
+def get_order(order_id: int, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.id == order_id, Order.user_id == user.id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return _order_to_response(order)
+
+
+@router.post("/{order_id}/cancel", response_model=OrderResponse)
+def cancel_order(order_id: int, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.id == order_id, Order.user_id == user.id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.status in ("shipped", "delivered"):
+        raise HTTPException(status_code=400, detail="Shipped or delivered orders cannot be cancelled")
+    order.status = "cancelled"
+    db.commit()
+    db.refresh(order)
+    return _order_to_response(order)
+
+
 @router.get("/admin/all", response_model=list[OrderResponse])
 def list_all_orders(admin=Depends(require_admin), db: Session = Depends(get_db)):
     orders = db.query(Order).order_by(Order.created_at.desc()).all()
