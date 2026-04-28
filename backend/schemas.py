@@ -97,6 +97,17 @@ class ProductUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+
+
+class StyleScanResponse(BaseModel):
+    suggested_name: str
+    suggested_description: str
+    suggested_category_id: Optional[int] = None
+    suggested_tags: list[str]
+    suggested_sizes: list[str]
+    suggested_colors: list[dict]
+    uploaded_image_url: str
+
 class ProductResponse(BaseModel):
     id: int
     name: str
