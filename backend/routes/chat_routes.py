@@ -1,174 +1,215 @@
 from __future__ import annotations
 
-import re
+import json
+import os
+import uuid
+import requests
 from urllib.parse import quote_plus
+from huggingface_hub import InferenceClient
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+from sqlalchemy import or_
+from groq import Groq
 
 from schemas import ChatRequest, ChatResponse
+from database import get_db
+from models import Product
 
-# Basic NLP dictionaries (simple and explicit by design)
-SUPPORTED_COLORS = {
-    "white",
-    "black",
-    "red",
-    "blue",
-    "green",
-    "yellow",
-    "orange",
-    "purple",
-    "pink",
-    "brown",
-    "gray",
-    "grey",  # alias normalized to gray
-    "beige",
-    "navy",
-}
-
-SUPPORTED_PRODUCTS = {
-    "shoe": "shoes",
-    "shoes": "shoes",
-    "sneaker": "sneakers",
-    "sneakers": "sneakers",
-    "shirt": "shirt",
-    "tshirt": "t-shirt",
-    "t-shirt": "t-shirt",
-    "hoodie": "hoodie",
-    "jacket": "jacket",
-    "jeans": "jeans",
-    "dress": "dress",
-    "bag": "bag",
-    "watch": "watch",
-    "cap": "cap",
-}
+# The user explicitly provided the key, but we'll use an environment variable as primary
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
+client = Groq(api_key=GROQ_API_KEY)
 
 CHAT_EXAMPLES = [
-    "show me red shoes",
-    "i want a black hoodie",
-    "find me a blue shirt",
+    "I am a 16 year old boy",
+    "When I'm a 21 year old boy going on a date, what clothes suit me?",
+    "Show me a beautiful dress for a summer wedding",
+    "I want a professional outfit for a job interview",
 ]
 
 router = APIRouter(prefix="/api", tags=["Chat"])
 
+def _generate_huggingface_image(image_prompt: str) -> str:
+    """Generate a realistic AI outfit image using Hugging Face and save locally."""
+    api_key = os.getenv("HUGGINGFACE_API_KEY")
+    if not api_key:
+        print("Warning: HUGGINGFACE_API_KEY not set")
+        return ""
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-def _normalize_text(text: str) -> str:
-    """Lowercase and remove punctuation so matching stays predictable."""
-    cleaned = re.sub(r"[^a-zA-Z0-9\s-]", " ", text.lower())
-    return re.sub(r"\s+", " ", cleaned).strip()
+    # Ensure uploads directory exists
+    if not os.path.exists("uploads"):
+        os.makedirs("uploads")
 
-
-def _extract_color(normalized_text: str) -> str:
-    """Detect first color mention. If absent, default to white."""
-    tokens = normalized_text.split()
-    for token in tokens:
-        if token in SUPPORTED_COLORS:
-            return "gray" if token == "grey" else token
-    return "white"
-
-
-def _extract_product(normalized_text: str) -> str | None:
-    """Detect first supported product mention."""
-    tokens = normalized_text.split()
-    for token in tokens:
-        if token in SUPPORTED_PRODUCTS:
-            return SUPPORTED_PRODUCTS[token]
-
-    # Tiny phrase fallback to catch words glued around punctuation/hyphens.
-    for raw, normalized in SUPPORTED_PRODUCTS.items():
-        if raw in normalized_text:
-            return normalized
-
-    return None
-
-
-def _build_image_prompt(color: str, product: str) -> str:
-    return (
-        f"A high-quality ecommerce product image of {color} {product}, "
-        "clean background, studio lighting"
-    )
-
-
-def _build_placeholder_image_url(color: str, product: str) -> str:
-    # Placeholder image service with readable overlay text.
-    label = quote_plus(f"{color} {product}")
-    return f"https://placehold.co/600x600/png?text={label}"
-
+    client = InferenceClient("black-forest-labs/FLUX.1-schnell", token=api_key)
+    
+    # Improve the prompt for better fashion results
+    full_prompt = f"{image_prompt}, high quality fashion photography, detailed, professional"
+    
+    try:
+        # Generate the image
+        image = client.text_to_image(full_prompt)
+        
+        # Save it
+        filename = f"hf_{uuid.uuid4().hex}.jpg"
+        filepath = os.path.join("uploads", filename)
+        image.save(filepath)
+        
+        return f"/api/uploads/{filename}"
+    except Exception as e:
+        print(f"Exception calling HF API: {e}")
+        return ""
 
 def _resolve_user_message(req: ChatRequest) -> str:
     """Read direct message input first, fallback to last user message in history."""
     if req.message and req.message.strip():
         return req.message.strip()
 
+    messages_list = []
+    # Try getting the last relevant user message
     for msg in reversed(req.messages):
         if msg.role.lower() == "user" and msg.content.strip():
             return msg.content.strip()
 
     return ""
 
+def _build_system_prompt() -> str:
+    return """You are the Ira AI Stylist, a highly capable and intelligent fashion assistant for an e-commerce platform.
+Your goal is to provide specific, stylish, and personalized clothing recommendations based on user characteristics like age, gender, and purpose.
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
+You must analyze the user's prompt and generate a recommendation for ONE main clothing outfit or item.
+
+YOU MUST strictly output only raw JSON with the following schema, and no other text:
+{
+  "reply": "Your conversational and friendly response addressing the user's fashion needs. Provide detailed styling advice.",
+  "product": "The main product category word (e.g. 'jacket', 'dress'). Very simple one or two words max.",
+  "color": "The primary color of the recommended outfit.",
+  "image_prompt": "A SHORT AND CONCISE prompt (maximum 10 words) for an AI image generator (e.g. 'handsome 21yo guy black jacket')."
+}
+"""
+
 @router.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
+def chat(req: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
     """
-    Simple e-commerce chatbot endpoint.
-    - Extracts product + color via string matching.
-    - Defaults color to white.
-    - Asks for clarification when product is not detected.
+    Intelligent AI Stylist chatbot endpoint using Groq.
+    - Uses LLaMA model to understand age, gender, and purpose.
+    - Generates a styled response, product extraction, and image prompt.
+    - Uses Pollinations AI to render an actual image.
     """
     user_message = _resolve_user_message(req)
-    normalized_text = _normalize_text(user_message)
-
-    product = _extract_product(normalized_text)
-    color = _extract_color(normalized_text)
-
-    if not product:
-        message = "Got it — which product are you looking for? (e.g., shoes, shirt, hoodie)"
+    
+    if not user_message:
+        message = "Hi! I am your Ira AI Stylist. Tell me your age, gender, and what occasion you're dressing for!"
         return ChatResponse(
             message=message,
             reply=message,
             product=None,
-            color=color,
+            color="white",
             image_prompt=None,
             image_url=None,
             examples=CHAT_EXAMPLES,
         )
 
-    image_prompt = _build_image_prompt(color=color, product=product)
-    image_url = _build_placeholder_image_url(color=color, product=product)
-    message = f"Sure — here is a {color} {product} option."
+    try:
+        # Call Groq API in JSON mode
+        completion = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": _build_system_prompt()},
+                {"role": "user", "content": user_message}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.7,
+            max_tokens=500
+        )
+        
+        response_content = completion.choices[0].message.content
+        data = json.loads(response_content)
+        
+        reply = data.get("reply", "Here is a stylish option for you!")
+        product = data.get("product", "outfit")
+        color = data.get("color", "multicolored")
+        image_prompt = data.get("image_prompt", f"A stylish {color} {product}")
+        
+        # Try to find a real product in the database first
+        db_product = None
+        if product and product.lower() != "outfit":
+            # Very simple search based on name or description matching the product and color keywords
+            search_query = db.query(Product).filter(Product.is_active == True)
+            search_query = search_query.filter(
+                or_(
+                    Product.name.ilike(f"%{product}%"),
+                    Product.description.ilike(f"%{product}%")
+                )
+            )
+            # Try to match color if provided
+            if color and color.lower() != "multicolored":
+                color_query = search_query.filter(
+                    or_(
+                        Product.name.ilike(f"%{color}%"),
+                        Product.description.ilike(f"%{color}%")
+                    )
+                )
+                db_product = color_query.first()
+            
+            if not db_product:
+                db_product = search_query.first()
 
-    return ChatResponse(
-        message=message,
-        reply=message,
-        product=product,
-        color=color,
-        image_prompt=image_prompt,
-        image_url=image_url,
-        examples=CHAT_EXAMPLES,
-    )
+        product_id = None
+        product_name = None
+
+        if db_product and db_product.image_url:
+            image_url = db_product.image_url
+            product_id = db_product.id
+            product_name = db_product.name
+            # Slightly modify the reply to mention we found a real match
+            reply += f"\n\nI recommend this {db_product.name} from our collection!"
+        else:
+            # Build HF image dynamically as fallback
+            image_url = _generate_huggingface_image(image_prompt)
+        
+        return ChatResponse(
+            message=reply,
+            reply=reply,
+            product=product,
+            product_id=product_id,
+            product_name=product_name,
+            color=color,
+            image_prompt=image_prompt,
+            image_url=image_url,
+            examples=CHAT_EXAMPLES,
+        )
+        
+    except Exception as e:
+        print(f"Groq API Error: {e}")
+        # Graceful fallback if Groq API fails or JSON is malformed
+        fallback_msg = "I'm having a little trouble thinking of the perfect outfit right now, but a classic white shirt never goes wrong!"
+        return ChatResponse(
+            message=fallback_msg,
+            reply=fallback_msg,
+            product="shirt",
+            color="white",
+            image_prompt="A classic plain white shirt, fashion photography",
+            image_url="",
+            examples=CHAT_EXAMPLES,
+        )
 
 
 @router.get("/chat/examples")
 def chat_examples() -> dict[str, list[dict[str, str]]]:
-    """Small set of sample requests/responses for quick manual testing."""
+    """Returns sample scenarios showing the capability of the AI stylist."""
     return {
         "examples": [
             {
-                "input": "show me red shoes",
-                "response_message": "Sure — here is a red shoes option.",
+                "input": "I am a 16 year old boy",
+                "response_message": "For a 16-year-old guy, a laid-back and trendy look is perfect. I recommend a comfortable oversized graphic hoodie paired with jeans.",
             },
             {
-                "input": "i want a hoodie",
-                "response_message": "Sure — here is a white hoodie option.",
+                "input": "I am a 21 year old boy going on a date, what fits me?",
+                "response_message": "For a date night, a smart-casual approach works best. A sharp black denim jacket over a minimalist white t-shirt gives you a confident and attractive style.",
             },
             {
-                "input": "show me something nice",
-                "response_message": "Got it — which product are you looking for? (e.g., shoes, shirt, hoodie)",
+                "input": "I need a professional outfit for a job interview (woman, 25)",
+                "response_message": "A tailored navy blazer matched with a crisp white blouse presents a strong, capable, and professional image for your interview.",
             },
         ]
     }

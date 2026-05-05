@@ -29,24 +29,7 @@ const CheckoutPage = () => {
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
-  const buildWhatsAppMessage = () => {
-    let message = "🛍️ *New Order from IRA Fashion*\n\n";
-    message += "*Customer Details:*\n";
-    message += `Name: ${form.firstName} ${form.lastName}\n`;
-    message += `Phone: ${form.phone}\n`;
-    message += `Address: ${form.address1}${form.address2 ? ", " + form.address2 : ""}\n`;
-    message += `City: ${form.city}, ${form.state} - ${form.pin}\n\n`;
-    message += "*Order Items:*\n";
-    items.forEach((item, idx) => {
-      message += `${idx + 1}. ${item.product.name}\n`;
-      message += `   Size: ${item.size} | Color: ${item.color} | Qty: ${item.quantity}\n`;
-      message += `   Price: ₹${(item.product.price * item.quantity).toLocaleString()}\n`;
-    });
-    message += `\n*Total: ₹${totalPrice.toLocaleString()}*\n`;
-    message += `*Shipping: Free*\n\n`;
-    message += "Please confirm my order. Thank you! 🙏";
-    return encodeURIComponent(message);
-  };
+
 
   const handleOrder = async () => {
     setSaving(true);
@@ -79,9 +62,8 @@ const CheckoutPage = () => {
       // Don't block checkout if DB save fails
     }
 
-    // Open WhatsApp
-    const whatsappUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${buildWhatsAppMessage()}`;
-    window.open(whatsappUrl, "_blank");
+    // WhatsApp message is now sent automatically by the backend via Twilio
+
     setOrderPlaced(true);
     clearCart();
     setSaving(false);
@@ -98,7 +80,7 @@ const CheckoutPage = () => {
       </p>
       <div className="flex items-center justify-center gap-2 text-green-600 mb-8">
         <MessageCircle size={18} />
-        <span className="font-body text-sm">WhatsApp: +91 7979760802</span>
+        <span className="font-body text-sm">Order details sent to your WhatsApp</span>
       </div>
       <Link to="/shop"><Button variant="hero" size="lg" className="px-10">Continue Shopping</Button></Link>
     </div>
@@ -180,8 +162,8 @@ const CheckoutPage = () => {
             onClick={handleOrder}
             disabled={!isFormValid || saving}
           >
-            <MessageCircle size={18} />
-            {saving ? "Placing Order..." : "Order via WhatsApp"}
+            <CheckCircle2 size={18} />
+            {saving ? "Placing Order..." : "Place Order"}
           </Button>
           {!isFormValid && (
             <p className="text-xs text-center text-muted-foreground">Please fill all required fields (*) to continue</p>

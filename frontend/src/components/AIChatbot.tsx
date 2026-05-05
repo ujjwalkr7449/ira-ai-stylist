@@ -1,11 +1,15 @@
 import { useState, useRef, useEffect } from "react";
 import { MessageCircle, X, Send, Sparkles, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Link } from "react-router-dom";
 import { chatApi } from "@/lib/api";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
+  imageUrl?: string;
+  productId?: number;
+  productName?: string;
 }
 
 const quickSuggestions = [
@@ -68,7 +72,13 @@ const AIChatbot = () => {
 
     try {
       const res = await chatApi.send(updatedMessages.map((m) => ({ role: m.role, content: m.content })));
-      setMessages((prev) => [...prev, { role: "assistant", content: res.reply }]);
+      setMessages((prev) => [...prev, { 
+        role: "assistant", 
+        content: res.reply, 
+        imageUrl: res.image_url,
+        productId: res.product_id,
+        productName: res.product_name
+      }]);
     } catch (err) {
       setMessages((prev) => [...prev, { role: "assistant", content: "Oops! I'm having a moment. Please try again in a few seconds." }]);
     }
@@ -112,6 +122,20 @@ const AIChatbot = () => {
                     : "bg-secondary text-secondary-foreground rounded-bl-sm"
                 }`}>
                   {m.role === "assistant" ? renderContent(m.content) : m.content}
+                  {m.imageUrl && (
+                    <div className="mt-3 rounded-lg overflow-hidden border border-border/50 bg-background/50 group relative">
+                      {m.productId ? (
+                        <Link to={`/product/${m.productId}`} className="block">
+                          <img src={m.imageUrl} alt={m.productName || "AI Stylist Recommendation"} className="w-full h-auto object-cover max-h-60 transition-transform group-hover:scale-105" loading="lazy" />
+                          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <span className="bg-white/90 text-black text-xs font-semibold px-3 py-1.5 rounded-full shadow-sm">View Product</span>
+                          </div>
+                        </Link>
+                      ) : (
+                        <img src={m.imageUrl} alt="AI Stylist Recommendation" className="w-full h-auto object-cover max-h-60" loading="lazy" />
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

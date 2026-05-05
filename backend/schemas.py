@@ -330,6 +330,8 @@ class ChatResponse(BaseModel):
     # Backward compatibility for UI currently reading `reply`.
     reply: str = Field(..., min_length=1, max_length=500)
     product: Optional[str] = None
+    product_id: Optional[int] = None
+    product_name: Optional[str] = None
     color: str
     image_prompt: Optional[str] = None
     image_url: Optional[str] = None

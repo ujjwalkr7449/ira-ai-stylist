@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ShoppingBag, User, Menu, X, Search, Heart, Shield, LogOut } from "lucide-react";
 import { useCart } from "@/context/CartContext";
 import { useWishlist } from "@/context/WishlistContext";
@@ -10,6 +10,20 @@ const Navbar = () => {
   const { totalItems: wishlistCount } = useWishlist();
   const { user, isAdmin, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const navigate = useNavigate();
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (searchQuery.trim()) {
+      navigate(`/shop?search=${encodeURIComponent(searchQuery.trim())}`);
+      setShowSearch(false);
+      setSearchQuery("");
+    } else {
+      navigate("/shop");
+    }
+  };
 
   const navLinks = [
     { to: "/shop", label: "Shop All" },
@@ -37,7 +51,23 @@ const Navbar = () => {
         </div>
 
         <div className="flex items-center gap-4">
-          <Link to="/shop" className="text-foreground hover:text-gold transition-colors"><Search size={20} /></Link>
+          {showSearch ? (
+            <form onSubmit={handleSearch} className="flex items-center relative animate-fade-in">
+              <input
+                autoFocus
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onBlur={() => !searchQuery.trim() && setShowSearch(false)}
+                placeholder="Search products..."
+                className="pl-8 pr-3 py-1 text-sm bg-card border border-border rounded-full focus:outline-none focus:ring-1 focus:ring-gold w-32 sm:w-48 transition-all"
+              />
+              <Search size={14} className="absolute left-3 text-muted-foreground pointer-events-none" />
+            </form>
+          ) : (
+            <button onClick={() => setShowSearch(true)} className="text-foreground hover:text-gold transition-colors">
+              <Search size={20} />
+            </button>
+          )}
           <Link to="/wishlist" className="relative text-foreground hover:text-gold transition-colors" aria-label="Wishlist">
             <Heart size={20} />
             {wishlistCount > 0 && (

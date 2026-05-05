@@ -5,6 +5,7 @@ from database import get_db
 from models import Order, OrderItem, User, Product
 from schemas import OrderCreate, OrderResponse, OrderItemResponse, OrderStatusUpdate, AdminStats
 from auth import get_current_user, get_optional_user, require_admin
+from services.whatsapp_service import send_whatsapp_order_confirmation
 
 router = APIRouter(prefix="/api/orders", tags=["Orders"])
 
@@ -52,6 +53,16 @@ def create_order(req: OrderCreate, user=Depends(get_optional_user), db: Session 
 
     db.commit()
     db.refresh(order)
+    
+    order_dict = {
+        "order_id": order.id,
+        "customer_name": order.customer_name,
+        "total": order.total,
+        "items": [{"product_name": item.product_name, "size": item.size, "color": item.color, "quantity": item.quantity, "price": item.price} for item in req.items]
+    }
+    if order.customer_phone:
+        send_whatsapp_order_confirmation(order.customer_phone, order_dict)
+        
     return _order_to_response(order)
 
 

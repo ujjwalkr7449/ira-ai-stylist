@@ -16,6 +16,7 @@ from models import (
     PaymentAttempt,
     IdempotencyKey,
 )
+from services.whatsapp_service import send_whatsapp_order_confirmation
 from schemas import (
     CheckoutQuoteRequest,
     CheckoutQuoteResponse,
@@ -196,6 +197,18 @@ def place_order(
 
     db.commit()
     db.refresh(order)
+    
+    order_dict = {
+        "order_id": order.id,
+        "customer_name": order.customer_name,
+        "total": order.total,
+        "items": calc["line_items"]
+    }
+    # Fire and forget or handle asynchronously in production.
+    # For now, we call it synchronously.
+    if order.customer_phone:
+        send_whatsapp_order_confirmation(order.customer_phone, order_dict)
+    
     return _order_to_response(order)
 
 

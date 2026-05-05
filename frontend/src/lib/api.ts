@@ -221,7 +221,7 @@ export interface ChatMessage {
 
 export const chatApi = {
   send: (messages: ChatMessage[]) =>
-    request<{ reply: string }>("/chat", { method: "POST", body: JSON.stringify({ messages }) }),
+    request<{ reply: string; image_url?: string; product_id?: number; product_name?: string }>("/chat", { method: "POST", body: JSON.stringify({ messages }) }),
 };
 
 // ─── Uploads ─────────────────────────────────────
