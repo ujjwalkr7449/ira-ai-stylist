@@ -20,3 +20,4 @@ TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238
 
 # Open-source model downloaded once and run locally by Diffusers.
 LOCAL_IMAGE_MODEL = os.getenv("LOCAL_IMAGE_MODEL", "segmind/tiny-sd")
+ENABLE_LOCAL_IMAGE_GENERATION = os.getenv("ENABLE_LOCAL_IMAGE_GENERATION", "true").lower() in {"1", "true", "yes", "on"}

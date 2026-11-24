@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 import os
 import uuid
 import shutil
@@ -76,3 +77,10 @@ async def upload_file(file: UploadFile = File(...)):
 
     # Return the public URL
     return {"url": f"/api/uploads/{filename}"}
+
+
+# In production Render serves the Vite build from this same origin, so the
+# frontend's relative /api requests reach FastAPI without a cross-origin proxy.
+FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+if FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")

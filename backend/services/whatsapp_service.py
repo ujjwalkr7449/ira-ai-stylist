@@ -10,9 +10,8 @@ def send_whatsapp_order_confirmation(phone_number: str, order_details: dict):
     phone_number should be in E.164 format (e.g., +917979760802).
     """
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
-        logger.warning("Twilio credentials not set. Mocking WhatsApp message.")
-        logger.info(f"Mock WhatsApp sent to {phone_number}:\n{order_details}")
-        return True
+        logger.warning("Twilio credentials not set; WhatsApp confirmation was not sent.")
+        return False
 
     try:
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

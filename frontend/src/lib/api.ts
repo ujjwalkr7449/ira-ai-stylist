@@ -164,17 +164,13 @@ export interface ApiOrder {
 export interface OrderCreateData {
   items: {
     product_id: number;
-    product_name: string;
     size: string;
     color: string;
     quantity: number;
-    price: number;
   }[];
   shipping_address: Record<string, string>;
   customer_name: string;
   customer_phone: string;
-  total: number;
-  whatsapp_sent: boolean;
 }
 
 export interface AdminStats {
@@ -186,8 +182,12 @@ export interface AdminStats {
 }
 
 export const orderApi = {
-  create: (data: OrderCreateData) =>
-    request<ApiOrder>("/orders", { method: "POST", body: JSON.stringify(data) }),
+  create: (data: OrderCreateData, idempotencyKey: string) =>
+    request<ApiOrder>("/orders", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(data),
+    }),
 
   myOrders: () => request<ApiOrder[]>("/orders"),
 

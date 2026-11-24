@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useCart } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
 import { orderApi } from "@/lib/api";
@@ -13,7 +13,9 @@ const CheckoutPage = () => {
   const { items, totalPrice, clearCart } = useCart();
   const { user } = useAuth();
   const [orderPlaced, setOrderPlaced] = useState(false);
+  const [whatsappSent, setWhatsappSent] = useState(false);
   const [saving, setSaving] = useState(false);
+  const idempotencyKey = useRef<string | null>(null);
   const [form, setForm] = useState({
     firstName: user?.name?.split(" ")[0] || "",
     lastName: user?.name?.split(" ").slice(1).join(" ") || "",
@@ -33,17 +35,16 @@ const CheckoutPage = () => {
 
   const handleOrder = async () => {
     setSaving(true);
-
-    // Save order to database
     try {
-      await orderApi.create({
+      const requestKey = idempotencyKey.current ?? crypto.randomUUID();
+      idempotencyKey.current = requestKey;
+
+      const order = await orderApi.create({
         items: items.map((item) => ({
           product_id: parseInt(item.product.id),
-          product_name: item.product.name,
           size: item.size,
           color: item.color,
           quantity: item.quantity,
-          price: item.product.price,
         })),
         shipping_address: {
           address1: form.address1,
@@ -54,19 +55,18 @@ const CheckoutPage = () => {
         },
         customer_name: `${form.firstName} ${form.lastName}`,
         customer_phone: form.phone,
-        total: totalPrice,
-        whatsapp_sent: true,
-      });
+      }, requestKey);
+
+      setWhatsappSent(order.whatsapp_sent);
+      setOrderPlaced(true);
+      clearCart();
+      idempotencyKey.current = null;
+      toast.success("Your order was placed.");
     } catch (err) {
-      console.error("Failed to save order:", err);
-      // Don't block checkout if DB save fails
+      toast.error(err instanceof Error ? err.message : "Could not place your order. Please try again.");
+    } finally {
+      setSaving(false);
     }
-
-    // WhatsApp message is now sent automatically by the backend via Twilio
-
-    setOrderPlaced(true);
-    clearCart();
-    setSaving(false);
   };
 
   const isFormValid = form.firstName && form.lastName && form.address1 && form.city && form.state && form.pin && form.phone;
@@ -74,13 +74,15 @@ const CheckoutPage = () => {
   if (orderPlaced) return (
     <div className="container mx-auto px-4 py-20 text-center animate-fade-in">
       <CheckCircle2 size={64} className="mx-auto text-green-500 mb-6" />
-      <h1 className="font-display text-3xl font-bold mb-3">Order Sent via WhatsApp!</h1>
+      <h1 className="font-display text-3xl font-bold mb-3">Order placed!</h1>
       <p className="font-body text-muted-foreground mb-4 max-w-md mx-auto">
-        Your order details have been sent to our WhatsApp. We'll confirm your order and share payment details shortly.
+        Your order has been saved. We'll confirm it and share payment and delivery details shortly.
       </p>
       <div className="flex items-center justify-center gap-2 text-green-600 mb-8">
         <MessageCircle size={18} />
-        <span className="font-body text-sm">Order details sent to your WhatsApp</span>
+        <span className="font-body text-sm">
+          {whatsappSent ? "Order confirmation sent via WhatsApp" : "WhatsApp confirmation could not be sent"}
+        </span>
       </div>
       <Link to="/shop"><Button variant="hero" size="lg" className="px-10">Continue Shopping</Button></Link>
     </div>

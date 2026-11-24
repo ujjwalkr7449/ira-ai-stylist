@@ -126,8 +126,9 @@ class OrderItemCreate(BaseModel):
     product_name: str = ""
     size: str
     color: str
-    quantity: int = 1
-    price: float
+    quantity: int = Field(default=1, ge=1)
+    # Accepted for backward compatibility; checkout always uses the DB price.
+    price: Optional[float] = None
 
 
 class OrderCreate(BaseModel):

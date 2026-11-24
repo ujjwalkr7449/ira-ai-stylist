@@ -14,7 +14,7 @@ from groq import Groq
 from schemas import ChatRequest, ChatResponse
 from database import get_db
 from models import Product
-from config import GROQ_API_KEY, GROQ_MODEL, LOCAL_IMAGE_MODEL
+from config import ENABLE_LOCAL_IMAGE_GENERATION, GROQ_API_KEY, GROQ_MODEL, LOCAL_IMAGE_MODEL
 
 # Read provider configuration from backend/config.py and environment variables.
 client = Groq(api_key=GROQ_API_KEY)
@@ -164,7 +164,7 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
 
     # The generated image is attempted regardless of whether Groq succeeded or
     # a matching catalog product exists. Use the catalog image only if HF fails.
-    generated_image_url = _generate_image(image_prompt)
+    generated_image_url = _generate_image(image_prompt) if ENABLE_LOCAL_IMAGE_GENERATION else ""
 
     db_product = None
     if product.lower() != "outfit":

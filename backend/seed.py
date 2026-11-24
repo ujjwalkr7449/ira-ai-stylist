@@ -21,16 +21,22 @@ Base.metadata.create_all(bind=engine)
 db = SessionLocal()
 
 # --- Admin User ---
-if not db.query(User).filter(User.email == "admin@ira.com" or "ujjwal@ira.com").first():
+admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
+admin_password = os.getenv("ADMIN_PASSWORD", "")
+if not admin_email or not admin_password:
+    db.close()
+    raise RuntimeError("Set ADMIN_EMAIL and ADMIN_PASSWORD before running seed.py")
+
+if not db.query(User).filter(User.email == admin_email).first():
     admin = User(
-        email="admin@ira.com" or "ujjwal@ira.com",
-        password_hash=hash_password("admin123") or hash_password("ujjwal123"),
+        email=admin_email,
+        password_hash=hash_password(admin_password),
         name="IRA Admin",
         phone="7979760802",
         role="admin",
     )
     db.add(admin)
-    print("[+] Admin user created: admin@ira.com / admin123")
+    print(f"[+] Admin user created: {admin_email}")
 else:
     print("[i] Admin already exists")
 
