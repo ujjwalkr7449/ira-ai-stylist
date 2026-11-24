@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import uuid
-import requests
-from urllib.parse import quote_plus
+import base64
+from io import BytesIO
+from pathlib import Path
+import httpx
+from PIL import Image
 from huggingface_hub import InferenceClient
 
 from fastapi import APIRouter, Depends
@@ -15,10 +17,18 @@ from groq import Groq
 from schemas import ChatRequest, ChatResponse
 from database import get_db
 from models import Product
+from config import (
+    CLOUDFLARE_ACCOUNT_ID,
+    CLOUDFLARE_API_TOKEN,
+    GROQ_API_KEY,
+    GROQ_MODEL,
+    HUGGINGFACE_API_KEY,
+    IMAGE_GENERATION_PROVIDER,
+)
 
-# The user explicitly provided the key, but we'll use an environment variable as primary
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
+# Read provider configuration from backend/config.py and environment variables.
 client = Groq(api_key=GROQ_API_KEY)
+UPLOAD_DIR = Path(__file__).resolve().parents[1] / "uploads"
 
 CHAT_EXAMPLES = [
     "I am a 16 year old boy",
@@ -27,37 +37,83 @@ CHAT_EXAMPLES = [
     "I want a professional outfit for a job interview",
 ]
 
+PRODUCT_SEARCH_TERMS = {
+    "shirt": ("shirt", "tee", "t-shirt", "tshirt"),
+    "t-shirt": ("shirt", "tee", "t-shirt", "tshirt"),
+    "tshirt": ("shirt", "tee", "t-shirt", "tshirt"),
+    "tee": ("shirt", "tee", "t-shirt", "tshirt"),
+}
+
 router = APIRouter(prefix="/api", tags=["Chat"])
 
-def _generate_huggingface_image(image_prompt: str) -> str:
-    """Generate a realistic AI outfit image using Hugging Face and save locally."""
-    api_key = os.getenv("HUGGINGFACE_API_KEY")
-    if not api_key:
-        print("Warning: HUGGINGFACE_API_KEY not set")
-        return ""
+def _save_generated_image(image_bytes: bytes, prefix: str) -> str:
+    """Save generated image bytes in the directory served by the uploads route."""
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{prefix}_{uuid.uuid4().hex}.jpg"
+    filepath = UPLOAD_DIR / filename
+    with Image.open(BytesIO(image_bytes)) as image:
+        image.convert("RGB").save(filepath, format="JPEG", quality=92)
+    return f"/api/uploads/{filename}"
 
-    # Ensure uploads directory exists
-    if not os.path.exists("uploads"):
-        os.makedirs("uploads")
 
-    client = InferenceClient("black-forest-labs/FLUX.1-schnell", token=api_key)
-    
-    # Improve the prompt for better fashion results
+def _generate_image(image_prompt: str) -> str:
+    """Generate an outfit image with the configured provider and save it locally."""
     full_prompt = f"{image_prompt}, high quality fashion photography, detailed, professional"
-    
-    try:
-        # Generate the image
-        image = client.text_to_image(full_prompt)
-        
-        # Save it
-        filename = f"hf_{uuid.uuid4().hex}.jpg"
-        filepath = os.path.join("uploads", filename)
-        image.save(filepath)
-        
-        return f"/api/uploads/{filename}"
-    except Exception as e:
-        print(f"Exception calling HF API: {e}")
-        return ""
+
+    if IMAGE_GENERATION_PROVIDER == "cloudflare":
+        if not CLOUDFLARE_ACCOUNT_ID or not CLOUDFLARE_API_TOKEN:
+            print("Cloudflare image generation is not configured (set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN)")
+            return ""
+        url = (
+            "https://api.cloudflare.com/client/v4/accounts/"
+            f"{CLOUDFLARE_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell"
+        )
+        try:
+            response = httpx.post(
+                url,
+                headers={"Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}"},
+                json={"prompt": full_prompt, "steps": 4},
+                timeout=120,
+            )
+            if response.is_error:
+                try:
+                    errors = response.json().get("errors", [])
+                    detail = "; ".join(error.get("message", "") for error in errors)
+                except (ValueError, AttributeError):
+                    detail = response.text[:300]
+                raise RuntimeError(f"Cloudflare returned HTTP {response.status_code}: {detail or 'request failed'}")
+            response.raise_for_status()
+            payload = response.json()
+            encoded_image = payload.get("result", {}).get("image")
+            if not encoded_image:
+                raise ValueError("Cloudflare response did not include a generated image")
+            image_bytes = base64.b64decode(encoded_image)
+            return _save_generated_image(image_bytes, "cf")
+        except Exception as e:
+            print(f"Cloudflare image generation failed: {e}")
+            return ""
+
+    if IMAGE_GENERATION_PROVIDER == "huggingface":
+        if not HUGGINGFACE_API_KEY:
+            print("Hugging Face image generation is not configured (set HF_TOKEN)")
+            return ""
+        image_client = InferenceClient(
+            model="black-forest-labs/FLUX.1-schnell",
+            provider="auto",
+            token=HUGGINGFACE_API_KEY,
+            timeout=120,
+        )
+        try:
+            image = image_client.text_to_image(full_prompt)
+            buffer = BytesIO()
+            image.save(buffer, format="PNG")
+            return _save_generated_image(buffer.getvalue(), "hf")
+        except Exception as e:
+            print(f"Hugging Face image generation failed: {e}")
+            return ""
+
+    print(f"Unsupported IMAGE_GENERATION_PROVIDER: {IMAGE_GENERATION_PROVIDER}")
+    return ""
 
 def _resolve_user_message(req: ChatRequest) -> str:
     """Read direct message input first, fallback to last user message in history."""
@@ -109,10 +165,12 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
             examples=CHAT_EXAMPLES,
         )
 
+    data = {}
     try:
-        # Call Groq API in JSON mode
+        # Text generation and image generation are independent; a Groq error
+        # should not prevent the Hugging Face image attempt below.
         completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=GROQ_MODEL,
             messages=[
                 {"role": "system", "content": _build_system_prompt()},
                 {"role": "user", "content": user_message}
@@ -122,76 +180,53 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
             max_tokens=500
         )
         
-        response_content = completion.choices[0].message.content
-        data = json.loads(response_content)
-        
-        reply = data.get("reply", "Here is a stylish option for you!")
-        product = data.get("product", "outfit")
-        color = data.get("color", "multicolored")
-        image_prompt = data.get("image_prompt", f"A stylish {color} {product}")
-        
-        # Try to find a real product in the database first
-        db_product = None
-        if product and product.lower() != "outfit":
-            # Very simple search based on name or description matching the product and color keywords
-            search_query = db.query(Product).filter(Product.is_active == True)
-            search_query = search_query.filter(
-                or_(
-                    Product.name.ilike(f"%{product}%"),
-                    Product.description.ilike(f"%{product}%")
-                )
-            )
-            # Try to match color if provided
-            if color and color.lower() != "multicolored":
-                color_query = search_query.filter(
-                    or_(
-                        Product.name.ilike(f"%{color}%"),
-                        Product.description.ilike(f"%{color}%")
-                    )
-                )
-                db_product = color_query.first()
-            
-            if not db_product:
-                db_product = search_query.first()
-
-        product_id = None
-        product_name = None
-
-        if db_product and db_product.image_url:
-            image_url = db_product.image_url
-            product_id = db_product.id
-            product_name = db_product.name
-            # Slightly modify the reply to mention we found a real match
-            reply += f"\n\nI recommend this {db_product.name} from our collection!"
-        else:
-            # Build HF image dynamically as fallback
-            image_url = _generate_huggingface_image(image_prompt)
-        
-        return ChatResponse(
-            message=reply,
-            reply=reply,
-            product=product,
-            product_id=product_id,
-            product_name=product_name,
-            color=color,
-            image_prompt=image_prompt,
-            image_url=image_url,
-            examples=CHAT_EXAMPLES,
-        )
-        
+        data = json.loads(completion.choices[0].message.content or "{}")
     except Exception as e:
         print(f"Groq API Error: {e}")
-        # Graceful fallback if Groq API fails or JSON is malformed
-        fallback_msg = "I'm having a little trouble thinking of the perfect outfit right now, but a classic white shirt never goes wrong!"
-        return ChatResponse(
-            message=fallback_msg,
-            reply=fallback_msg,
-            product="shirt",
-            color="white",
-            image_prompt="A classic plain white shirt, fashion photography",
-            image_url="",
-            examples=CHAT_EXAMPLES,
+
+    product = data.get("product") or "outfit"
+    color = data.get("color") or "multicolored"
+    reply = data.get("reply") or "Here is a stylish option based on your request."
+    image_prompt = data.get("image_prompt") or f"{color} fashion outfit for {user_message}"
+
+    # The generated image is attempted regardless of whether Groq succeeded or
+    # a matching catalog product exists. Use the catalog image only if HF fails.
+    generated_image_url = _generate_image(image_prompt)
+
+    db_product = None
+    if product.lower() != "outfit":
+        product_terms = PRODUCT_SEARCH_TERMS.get(product.lower(), (product,))
+        product_filters = [
+            or_(Product.name.ilike(f"%{term}%"), Product.description.ilike(f"%{term}%"))
+            for term in product_terms
+        ]
+        search_query = db.query(Product).filter(Product.is_active == True).filter(
+            or_(*product_filters)
         )
+        if color.lower() != "multicolored":
+            db_product = search_query.filter(
+                or_(Product.name.ilike(f"%{color}%"), Product.description.ilike(f"%{color}%"))
+            ).first()
+        if not db_product:
+            db_product = search_query.first()
+
+    product_id = db_product.id if db_product else None
+    product_name = db_product.name if db_product else None
+    image_url = generated_image_url or (db_product.image_url if db_product else "")
+    if db_product:
+        reply += f"\n\nI recommend this {db_product.name} from our collection!"
+
+    return ChatResponse(
+        message=reply,
+        reply=reply,
+        product=product,
+        product_id=product_id,
+        product_name=product_name,
+        color=color,
+        image_prompt=image_prompt,
+        image_url=image_url,
+        examples=CHAT_EXAMPLES,
+    )
 
 
 @router.get("/chat/examples")
