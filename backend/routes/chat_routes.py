@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
-import base64
-from io import BytesIO
 from pathlib import Path
-import httpx
 from PIL import Image
-from huggingface_hub import InferenceClient
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -17,18 +14,13 @@ from groq import Groq
 from schemas import ChatRequest, ChatResponse
 from database import get_db
 from models import Product
-from config import (
-    CLOUDFLARE_ACCOUNT_ID,
-    CLOUDFLARE_API_TOKEN,
-    GROQ_API_KEY,
-    GROQ_MODEL,
-    HUGGINGFACE_API_KEY,
-    IMAGE_GENERATION_PROVIDER,
-)
+from config import GROQ_API_KEY, GROQ_MODEL, LOCAL_IMAGE_MODEL
 
 # Read provider configuration from backend/config.py and environment variables.
 client = Groq(api_key=GROQ_API_KEY)
 UPLOAD_DIR = Path(__file__).resolve().parents[1] / "uploads"
+_LOCAL_IMAGE_PIPELINE = None
+_LOCAL_IMAGE_PIPELINE_LOCK = threading.Lock()
 
 CHAT_EXAMPLES = [
     "I am a 16 year old boy",
@@ -46,74 +38,58 @@ PRODUCT_SEARCH_TERMS = {
 
 router = APIRouter(prefix="/api", tags=["Chat"])
 
-def _save_generated_image(image_bytes: bytes, prefix: str) -> str:
-    """Save generated image bytes in the directory served by the uploads route."""
+def _save_generated_image(image: Image.Image, prefix: str) -> str:
+    """Save a generated image in the directory served by the uploads route."""
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"{prefix}_{uuid.uuid4().hex}.jpg"
     filepath = UPLOAD_DIR / filename
-    with Image.open(BytesIO(image_bytes)) as image:
-        image.convert("RGB").save(filepath, format="JPEG", quality=92)
+    image.convert("RGB").save(filepath, format="JPEG", quality=90)
     return f"/api/uploads/{filename}"
 
 
-def _generate_image(image_prompt: str) -> str:
-    """Generate an outfit image with the configured provider and save it locally."""
-    full_prompt = f"{image_prompt}, high quality fashion photography, detailed, professional"
+def _get_local_image_pipeline():
+    """Load the open-source Diffusers model once and reuse it for chat requests."""
+    global _LOCAL_IMAGE_PIPELINE
+    if _LOCAL_IMAGE_PIPELINE is not None:
+        return _LOCAL_IMAGE_PIPELINE
 
-    if IMAGE_GENERATION_PROVIDER == "cloudflare":
-        if not CLOUDFLARE_ACCOUNT_ID or not CLOUDFLARE_API_TOKEN:
-            print("Cloudflare image generation is not configured (set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN)")
-            return ""
-        url = (
-            "https://api.cloudflare.com/client/v4/accounts/"
-            f"{CLOUDFLARE_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell"
-        )
-        try:
-            response = httpx.post(
-                url,
-                headers={"Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}"},
-                json={"prompt": full_prompt, "steps": 4},
-                timeout=120,
+    with _LOCAL_IMAGE_PIPELINE_LOCK:
+        if _LOCAL_IMAGE_PIPELINE is None:
+            import torch
+            from diffusers import DiffusionPipeline
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            dtype = torch.float16 if device == "cuda" else torch.float32
+            pipeline = DiffusionPipeline.from_pretrained(
+                LOCAL_IMAGE_MODEL,
+                torch_dtype=dtype,
             )
-            if response.is_error:
-                try:
-                    errors = response.json().get("errors", [])
-                    detail = "; ".join(error.get("message", "") for error in errors)
-                except (ValueError, AttributeError):
-                    detail = response.text[:300]
-                raise RuntimeError(f"Cloudflare returned HTTP {response.status_code}: {detail or 'request failed'}")
-            response.raise_for_status()
-            payload = response.json()
-            encoded_image = payload.get("result", {}).get("image")
-            if not encoded_image:
-                raise ValueError("Cloudflare response did not include a generated image")
-            image_bytes = base64.b64decode(encoded_image)
-            return _save_generated_image(image_bytes, "cf")
-        except Exception as e:
-            print(f"Cloudflare image generation failed: {e}")
-            return ""
+            pipeline.to(device)
+            _LOCAL_IMAGE_PIPELINE = pipeline
+            print(f"Loaded local image model {LOCAL_IMAGE_MODEL} on {device}")
 
-    if IMAGE_GENERATION_PROVIDER == "huggingface":
-        if not HUGGINGFACE_API_KEY:
-            print("Hugging Face image generation is not configured (set HF_TOKEN)")
-            return ""
-        image_client = InferenceClient(
-            model="black-forest-labs/FLUX.1-schnell",
-            provider="auto",
-            token=HUGGINGFACE_API_KEY,
-            timeout=120,
-        )
-        try:
-            image = image_client.text_to_image(full_prompt)
-            buffer = BytesIO()
-            image.save(buffer, format="PNG")
-            return _save_generated_image(buffer.getvalue(), "hf")
-        except Exception as e:
-            print(f"Hugging Face image generation failed: {e}")
-            return ""
+    return _LOCAL_IMAGE_PIPELINE
 
-    print(f"Unsupported IMAGE_GENERATION_PROVIDER: {IMAGE_GENERATION_PROVIDER}")
-    return ""
+
+def _generate_image(image_prompt: str) -> str:
+    """Generate an outfit image locally with Diffusers and save it for the UI."""
+    full_prompt = f"{image_prompt}, high quality fashion photography, detailed, professional"
+    try:
+        import torch
+
+        pipeline = _get_local_image_pipeline()
+        with torch.inference_mode():
+            result = pipeline(
+                prompt=full_prompt,
+                height=512,
+                width=512,
+                num_inference_steps=8,
+                guidance_scale=7.5,
+            )
+        return _save_generated_image(result.images[0], "local")
+    except Exception as e:
+        print(f"Local Diffusers image generation failed: {type(e).__name__}: {e}")
+        return ""
 
 def _resolve_user_message(req: ChatRequest) -> str:
     """Read direct message input first, fallback to last user message in history."""
@@ -146,10 +122,7 @@ YOU MUST strictly output only raw JSON with the following schema, and no other t
 @router.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
     """
-    Intelligent AI Stylist chatbot endpoint using Groq.
-    - Uses LLaMA model to understand age, gender, and purpose.
-    - Generates a styled response, product extraction, and image prompt.
-    - Uses Pollinations AI to render an actual image.
+    Use Groq for styling text and local Diffusers for outfit image generation.
     """
     user_message = _resolve_user_message(req)
     

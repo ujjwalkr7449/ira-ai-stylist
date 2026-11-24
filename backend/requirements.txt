@@ -7,6 +7,10 @@ python-multipart==0.0.20
 pydantic[email-validator]==2.11.3
 httpx==0.28.1
 groq>=1.2.0
+diffusers>=0.35.0
+transformers>=4.45.0
+accelerate>=1.1.0
+torch>=2.5.0
 python-dotenv==1.0.1
 twilio>=9.0.0
 psycopg2-binary==2.9.9
