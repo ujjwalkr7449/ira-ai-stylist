@@ -21,10 +21,10 @@ Base.metadata.create_all(bind=engine)
 db = SessionLocal()
 
 # --- Admin User ---
-if not db.query(User).filter(User.email == "admin@ira.com").first():
+if not db.query(User).filter(User.email == "admin@ira.com" or "ujjwal@ira.com").first():
     admin = User(
-        email="admin@ira.com",
-        password_hash=hash_password("admin123"),
+        email="admin@ira.com" or "ujjwal@ira.com",
+        password_hash=hash_password("admin123") or hash_password("ujjwal123"),
         name="IRA Admin",
         phone="7979760802",
         role="admin",
